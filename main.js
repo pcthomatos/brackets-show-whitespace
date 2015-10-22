@@ -1,6 +1,6 @@
 /*
  * The MIT License (MIT)
- * Copyright (c) 2012-2015 Dennis Kehrig. All rights reserved.
+ * Copyright (c) 2012 Dennis Kehrig. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -27,53 +27,38 @@
 
 define(function (require, exports, module) {
     "use strict";
-    
-    
+
+
     // --- Required modules ---
 
-    var _                  = brackets.getModule("thirdparty/lodash"),
-        AppInit            = brackets.getModule("utils/AppInit"),
-        CommandManager     = brackets.getModule("command/CommandManager"),
-        EditorManager      = brackets.getModule("editor/EditorManager"),
-        ExtensionUtils     = brackets.getModule("utils/ExtensionUtils"),
-        Menus              = brackets.getModule("command/Menus"),
-        PreferencesManager = brackets.getModule("preferences/PreferencesManager"),
-        stylesTemplate     = require("text!styles/whitespace-colors-css.tmpl"),
-        Strings            = require("strings");
+    var CommandManager     = brackets.getModule("command/CommandManager");
+    var EditorManager      = brackets.getModule("editor/EditorManager");
+    var ExtensionUtils     = brackets.getModule("utils/ExtensionUtils");
+    var Menus              = brackets.getModule("command/Menus");
+    var PreferencesManager = brackets.getModule("preferences/PreferencesManager");
 
-    
+    // Support for Brackets Sprint 38+ : https://github.com/adobe/brackets/wiki/Brackets-CodeMirror-v4-Migration-Guide
+    var CodeMirror = brackets.getModule("thirdparty/CodeMirror2/lib/codemirror");
+
+
     // --- Settings ---
-    
-    var commandID          = "denniskehrig.ShowWhitespace.toggle";
-    var preferencesID      = "denniskehrig.ShowWhitespace";
-    var defaultPreferences = {
-        enabled: true,
-        colors: {
-            "light": {
-                "empty": "#ccc",
-                "leading": "#ccc",
-                "trailing": "#ff0000",
-                "whitespace": "#ccc"
-            },
-            "dark": {
-                "empty": "#686963",
-                "leading": "#686963",
-                "trailing": "#ff0000",
-                "whitespace": "#686963"
-            }
-        }
-    };
 
-    
+    var commandId          = "pcthomatos.ShowWhitespace.toggle";
+    var commandTabId          = "pcthomatos.ShowWhitespaceTab.toggle";
+    var preferencesId      = "pcthomatos.ShowWhitespace";
+    var defaultPreferences = { checked: false, checkedTab: true };
+
+
     // --- State Variables ---
-    
+
     var _preferences,
         _command,
+		_commandTab,
         _styleTag,
-        _styleInline,
-        _styleInlineTemplate;
+        _Line,
+        _LineGetHTML;
 
-    
+
     // --- Functionality ---
 
     /**
@@ -85,113 +70,216 @@ define(function (require, exports, module) {
         var _appendSpace    = false,
             _isLeading      = true,
             _isTrailing     = false,
-            _isEmptyLine    = false,
             _trailingOffset = null;
-        
+
         return {
             token: function (stream, state) {
                 var ch,
                     trailing,
                     ateCode     = false,
                     tokenStyle  = "";
-                
+
                 // Start of line: reset state
                 if (stream.sol()) {
                     _isLeading  = true;
                     _isTrailing = false;
-                    _isEmptyLine = false;
-                    
+
                     _trailingOffset = stream.string.length;
-                    trailing = stream.string.match(/[ \t\u00A0]+$/);
+                    trailing = stream.string.match(/[ \t]+$/);
                     if (trailing) {
                         _trailingOffset -= trailing[0].length;
-                        // Everything is whitespace
-                        if (_trailingOffset === 0) {
-                            _isEmptyLine = true;
-                        }
                     }
                 }
-                
+
                 // Peek ahead one character at a time
                 // Wrapping the assignment in a Boolean makes JSLint happy
                 while (Boolean(ch = stream.peek())) {
-                    if (ch === " " || ch === "\t" || ch === "\xA0") {
+                    if ((_command.getChecked() && ch === " ") || (_commandTab.getChecked() && ch === "\t")) {
                         if (ateCode) {
                             // Return now to mark all code seen so far as not necessary to highlight
                             return null;
                         }
                         // Eat the whitespace
-                        stream.next();
-                        
-                        // Test if this is a trailing whitespace
-                        if (!_isLeading && !_isTrailing) {
-                            _isTrailing = stream.pos >= _trailingOffset;
-                        }
-                        
-                        // CodeMirror merges consecutive tokens with the same style
-                        // There's a setting called "flattenSpans" to prevent that, but it's for the whole editor*
-                        // So instead we simply append a space character to the style every other time
-                        // This disables CodeMirror's string comparison while having no effect on the CSS class
-                        // *changed in https://github.com/marijnh/CodeMirror/commit/221a1e4070d503f4597f7823e4f2cf68ba884cdf
-                        _appendSpace = !_appendSpace;
-                        
-                        tokenStyle  += "dk-whitespace-";
-                        tokenStyle  += (_isEmptyLine ? "empty-line-" : (_isLeading ? "leading-" : (_isTrailing ? "trailing-" : "")));
-                        tokenStyle  += (ch === " " ? "space" : (ch === "\xA0" ? "nonbrk-space" : "tab"));
-                        tokenStyle  += (_appendSpace ? " " : "");
-                        
-                        return tokenStyle;
-                    } else {
-                        stream.next();
-                        ateCode     = true;
-                        _isLeading  = false;
-                    }
+                       stream.next();
+
+                       // Test if this is a trailing whitespace
+                       if (!_isLeading && !_isTrailing) {
+                           _isTrailing = stream.pos >= _trailingOffset;
+                       }
+
+                       // CodeMirror merges consecutive tokens with the same style
+                       // There's a setting called "flattenSpans" to prevent that, but it's for the whole editor*
+                       // So instead we simply append a space character to the style every other time
+                       // This disables CodeMirror's string comparison while having no effect on the CSS class
+                       // *changed in https://github.com/marijnh/CodeMirror/commit/221a1e4070d503f4597f7823e4f2cf68ba884cdf
+                       _appendSpace = !_appendSpace;
+
+                       tokenStyle  += "dk-whitespace-";
+                       tokenStyle  += (_isLeading ? "leading-" : (_isTrailing ? "trailing-" : ""));
+                       tokenStyle  += (ch === " " ? "space" : "tab");
+                       tokenStyle  += (_appendSpace ? " " : "");
+
+                       return tokenStyle;
+                   } else {
+                       stream.next();
+                       ateCode     = true;
+                       _isLeading  = false;
+                   }
                 }
                 return null;
             }
         };
     }
-    
-    /**
-     * Apply the whitespace colors.
-     * This does NOT overwrite styles already defined by a theme.
-     */
-    function _applyColors() {
-        _styleInline.text(_styleInlineTemplate(_preferences.get("colors")));
+
+    function patchCodeMirror(codeMirror) {
+        // Avoid double patching
+        if (_Line && _LineGetHTML) { return; }
+
+        // Remember Line and Line.getHTML to be able to unpatch without a reference to CM
+        _Line = Object.getPrototypeOf(codeMirror.getLineHandle(0));
+        _LineGetHTML = _Line.getHTML;
+
+        // Constants
+        var TAG_CLOSE = "</span>";
+        var CM_TAB    = "<span class=\"cm-tab\">";
+        var TAB       = "<span class=\"cm-tab cm-dk-whitespace-tab\">";
+        var SPACE     = "<span class=\"cm-space cm-dk-whitespace-space\">";
+
+        // Closure to make our getHTML independent of this extension
+        var _super = _Line.getHTML;
+        _Line.getHTML = function getHTML(makeTab, wrapAt, wrapId, wrapWBR) {
+            var html = _super.apply(this, arguments);
+
+            // Nothing to do
+            if (!_command || !_command.getChecked() || !this.text) { return html; }
+            if (!_commandTab || !_commandTab.getChecked() || !this.text) { return html; }
+
+            // Local variables for the loop
+            var pos, part;
+
+            // Optimizations
+            var length = html.length;
+
+            // Output
+            var output = [];
+
+            // State
+            var offset = 0;
+            var tags   = [];
+
+            while (offset < length) {
+                if (html.slice(offset, offset + 1) === "<") {
+                    // Tag mode
+
+                    // Look for the end of the tag
+                    pos  = html.indexOf(">", offset + 1);
+                    part = html.slice(offset, pos + 1);
+
+                    // Update the state
+                    offset = pos + 1;
+                    if (part.slice(1, 2) === "/") {
+                        tags.pop();
+                    } else {
+                        tags.push(part);
+                    }
+
+                    if (part === CM_TAB) { part = TAB; }
+                } else {
+                    // Text mode
+
+                    // Look for the start of a tag
+                    pos = html.indexOf("<", offset);
+                    // The entire rest of the string is escaped text
+                    if (pos === -1) { pos = length + 1; }
+                    part = html.slice(offset, pos);
+
+                    // Update the state
+                    offset = pos;
+
+                    // Leave the spaces in tabs as they are
+                    if (tags[tags.length - 1] !== CM_TAB) {
+                        // Mark the spaces appropriately
+                        part = part.replace(/ /g, SPACE + " " + TAG_CLOSE);
+                    }
+                }
+
+                // No need to handle empty strings
+                if (part !== "") {
+                    // Add the part to the output
+                    output.push(part);
+                }
+            }
+
+            output = output.join("");
+            return output;
+        };
     }
 
-    function updateOverlay(editor) {
+    function unpatchCodeMirror() {
+        if (_Line && _LineGetHTML) {
+            _Line.getHTML = _LineGetHTML;
+            _LineGetHTML = null;
+            _Line = null;
+        }
+    }
+
+    function updateEditorViaOverlay(editor) {
         var codeMirror = editor._codeMirror;
         if (!codeMirror) { return; }
-        
+
         var showWhitespace = _command.getChecked();
-        
+        var showWhitespaceTab = _commandTab.getChecked();
+
         if (!showWhitespace && codeMirror._dkShowWhitespaceOverlay) {
             codeMirror.removeOverlay(codeMirror._dkShowWhitespaceOverlay);
             delete codeMirror._dkShowWhitespaceOverlay;
         }
-        
+
         if (showWhitespace && !codeMirror._dkShowWhitespaceOverlay) {
             codeMirror._dkShowWhitespaceOverlay = _makeOverlay();
             codeMirror.addOverlay(codeMirror._dkShowWhitespaceOverlay);
         }
+
+        if (!showWhitespaceTab && codeMirror._dkShowWhitespaceTabOverlay) {
+            codeMirror.removeOverlay(codeMirror._dkShowWhitespaceTabOverlay);
+            delete codeMirror._dkShowWhitespaceTabOverlay;
+        }
+
+        if (showWhitespaceTab && !codeMirror._dkShowWhitespaceTabOverlay) {
+            codeMirror._dkShowWhitespaceTabOverlay = _makeOverlay();
+            codeMirror.addOverlay(codeMirror._dkShowWhitespaceTabOverlay);
+        }
     }
-    
+
+    // CodeMirror 2 version
+    function updateEditorViaPatch(editor) {
+        var codeMirror = editor._codeMirror;
+        if (!codeMirror) { return; }
+
+        if (_command.getChecked() || _commandTab.getChecked()) {
+            patchCodeMirror(codeMirror);
+        } else {
+            unpatchCodeMirror();
+        }
+        codeMirror.refresh();
+    }
+
     function updateEditors(includeEditor) {
         var fullEditor = EditorManager.getCurrentFullEditor();
         if (!fullEditor) { return; }
-        
+
         var editors = [fullEditor].concat(EditorManager.getInlineEditors(fullEditor));
-        
+
         // activeEditorChange fires before a just opened inline editor would be listed by getInlineEditors
         // So we include it manually
         if (includeEditor && editors.indexOf(includeEditor) === -1) {
             editors.push(includeEditor);
         }
-        
-        editors.forEach(updateOverlay);
+
+        // CodeMirror 2 doesn't set a version and doesn't feature addOverlay yet, so we use a different strategy
+        editors.forEach(CodeMirror.version ? updateEditorViaOverlay : updateEditorViaPatch);
     }
-    
+
     // --- Event Handlers ---
 
     function onCommandExecuted() {
@@ -202,107 +290,124 @@ define(function (require, exports, module) {
         }
     }
 
+    function onCommandTabExecuted() {
+        if (!_commandTab.getChecked()) {
+            _commandTab.setChecked(true);
+        } else {
+            _commandTab.setChecked(false);
+        }
+    }
+
     function onCheckedStateChange() {
-        _preferences.set("enabled", _command.getChecked());
-        _preferences.set("colors", _preferences.get("colors"));
-        _preferences.save();
+        _preferences.set("checked", Boolean(_command.getChecked()));
         updateEditors();
     }
-    
+
+    function onCheckedTabStateChange() {
+        _preferences.set("checkedTab", Boolean(_commandTab.getChecked()));
+        updateEditors();
+    }
+
     function onActiveEditorChange(e, editor) {
         updateEditors(editor);
     }
 
-    function updateColors(e, data) {
-        if (data.ids.indexOf("theme") > -1 || data.ids.indexOf("colors") > -1) {
-            _applyColors();
-        }
-    }
-
-    
     // --- Loaders and Unloaders ---
 
     function loadPreferences() {
-        _preferences = PreferencesManager.getExtensionPrefs(preferencesID);
-        _preferences.definePreference("enabled", "boolean", defaultPreferences.enabled);
-        _preferences.definePreference("colors", "Object", defaultPreferences.colors);
-    }
-  
-    function loadPrefListeners() {
-        _preferences.on("change", function (e, data) {
-            _command.setChecked(_preferences.get("enabled"));
-            updateColors(e, data);
-        });
-        PreferencesManager.getExtensionPrefs("themes").on("change", updateColors);
-    }
-  
-    function unloadPrefListeners() {
-        _preferences.off("change", updateColors);
-        PreferencesManager.getExtensionPrefs("themes").off("change", updateColors);
+        _preferences = PreferencesManager.getExtensionPrefs(preferencesId);
+        _preferences.definePreference("checked", "boolean", defaultPreferences["checked"]);
+        _preferences.definePreference("checkedTab", "boolean", defaultPreferences["checkedTab"]);
     }
 
 
     function loadStyle() {
-        ExtensionUtils.loadStyleSheet(module, "styles/main.less").done(function (node) {
+        ExtensionUtils.loadStyleSheet(module, "main.less").done(function (node) {
             _styleTag = node;
         });
-        _styleInline = $(ExtensionUtils.addEmbeddedStyleSheet(""));
-        _styleInlineTemplate = _.template(stylesTemplate);
-        _applyColors();
     }
 
     function unloadStyle() {
         $(_styleTag).remove();
     }
 
-    
+
     function loadCommand() {
-        _command = CommandManager.get(commandID);
-        
+        _command = CommandManager.get(commandId);
+
         if (!_command) {
-            _command = CommandManager.register(Strings.CMD_TOGGLE, commandID, onCommandExecuted);
+            _command = CommandManager.register("Show Spaces", commandId, onCommandExecuted);
         } else {
-            CommandManager.execute(commandID);
+            _command._commandFn = onCommandExecuted;
         }
 
-        _command.on("checkedStateChange", onCheckedStateChange);
-        
-        // Enable/disable extension based on user preference
-        _command.setChecked(_preferences.get("enabled"));
+        $(_command).on("checkedStateChange", onCheckedStateChange);
+
+        // Apply preferences
+        _command.setChecked(_preferences.get("checked"));
     }
 
     function unloadCommand() {
         _command.setChecked(false);
-        _command.off("checkedStateChange", onCheckedStateChange);
+        $(_command).off("checkedStateChange", onCheckedStateChange);
         _command._commandFn = null;
     }
 
-    
+	function loadCommandTab() {
+        _commandTab = CommandManager.get(commandTabId);
+
+        if (!_commandTab) {
+            _commandTab = CommandManager.register("Show Tabs", commandTabId, onCommandTabExecuted);
+        } else {
+            _commandTab._commandFn = onCommandTabExecuted;
+        }
+
+        $(_commandTab).on("checkedStateChange", onCheckedTabStateChange);
+
+        // Apply preferences
+        _commandTab.setChecked(_preferences.get("checkedTab"));
+    }
+
+    function unloadCommandTab() {
+        _commandTab.setChecked(false);
+        $(_commandTab).off("checkedStateChange", onCheckedTabStateChange);
+        _commandTab._commandFn = null;
+    }
+
+
     function loadMenuItem() {
-        Menus.getMenu("view-menu").addMenuItem(commandID, "Ctrl-Alt-W");
+        Menus.getMenu("view-menu").addMenuItem(commandId, "Ctrl-Alt-W");
     }
 
     function unloadMenuItem() {
-        Menus.getMenu("view-menu").removeMenuItem(commandID);
+        Menus.getMenu("view-menu").removeMenuItem(commandId);
     }
-    
-    
+    function loadMenuTabItem() {
+        Menus.getMenu("view-menu").addMenuItem(commandTabId, "Ctrl-Alt-E");
+    }
+
+    function unloadMenuTabItem() {
+        Menus.getMenu("view-menu").removeMenuItem(commandTabId);
+    }
+
+
     function loadEditorSync() {
-        EditorManager.on("activeEditorChange", onActiveEditorChange);
+        $(EditorManager).on("activeEditorChange", onActiveEditorChange);
     }
 
     function unloadEditorSync() {
-        EditorManager.off("activeEditorChange", onActiveEditorChange);
+        $(EditorManager).off("activeEditorChange", onActiveEditorChange);
     }
 
-    
+
     // Setup the UI
     function load() {
         loadPreferences();
         loadStyle();
-        loadPrefListeners();
         loadCommand();
+        loadCommandTab();
         loadMenuItem();
+        loadMenuTabItem();
         loadEditorSync();
     }
 
@@ -310,10 +415,20 @@ define(function (require, exports, module) {
     function unload() {
         unloadEditorSync();
         unloadMenuItem();
+        unloadMenuTabItem();
         unloadCommand();
+        unloadCommandTab();
         unloadStyle();
-        unloadPrefListeners();
     }
 
-    AppInit.appReady(load);
+
+    // --- Exports ---
+
+    exports.load = load;
+    exports.unload = unload;
+
+
+    // --- Initializiation ---
+
+    load();
 });
